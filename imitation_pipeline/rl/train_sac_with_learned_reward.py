@@ -73,20 +73,28 @@ def create_env(renders=False, curriculum_phase=2):
     return env
 
 
-def warm_start_with_bc(agent, bc_policy, env, device='cpu', n_steps=5000, curriculum_phase=0):
+def warm_start_with_bc(agent, bc_policy, env, device='cpu', n_steps=5000, curriculum_phase=0, guided_only=False):
     """
     用 BC policy + 引导式探索填充 replay buffer。
     在多个课程阶段采样,确保 buffer 包含不同难度的数据。
+    guided_only=True 时只做引导探索（用于 curriculum 升级后的 refresh）。
     """
     print("[SAC] Warm-starting replay buffer with BC + guided exploration...")
 
     collected = 0
     total_successes = 0
 
-    # ---- 引导式探索:在当前课程阶段 + 下一阶段采样 ----
+    # ---- 引导式探索:在当前课程阶段采样 ----
     phases_to_sample = [curriculum_phase]
-    if curriculum_phase < 2:
+    if not guided_only and curriculum_phase < 2:
         phases_to_sample.append(curriculum_phase + 1)  # 也采样下一难度
+
+    # 引导探索分配全部步数（guided_only）或一半步数（和 BC 共享）
+    if guided_only:
+        guided_steps = n_steps
+    else:
+        guided_steps = n_steps // 2
+    steps_per_phase = guided_steps // len(phases_to_sample)
 
     for phase in phases_to_sample:
         env.curriculum_phase = phase
@@ -95,9 +103,8 @@ def warm_start_with_bc(agent, bc_policy, env, device='cpu', n_steps=5000, curric
         if isinstance(state, tuple):
             state = state[0]
 
-        phase_steps = n_steps // (2 * len(phases_to_sample))
         phase_successes = 0
-        for _ in range(phase_steps):
+        for _ in range(steps_per_phase):
             member_pos = np.array(env.member_pose[0])
             target_pos = np.array(env.get_target_pose()[0])
             diff = target_pos - member_pos
@@ -120,11 +127,11 @@ def warm_start_with_bc(agent, bc_policy, env, device='cpu', n_steps=5000, curric
                     state = state[0]
 
         total_successes += phase_successes
-        print(f"[SAC] Phase {phase}: {phase_steps} steps, {phase_successes} successes")
+        print(f"[SAC] Phase {phase}: {steps_per_phase} steps, {phase_successes} successes")
 
-    # ---- BC policy 填充剩余 ----
+    # ---- BC policy 填充剩余（guided_only 模式跳过）----
     env.curriculum_phase = curriculum_phase
-    if bc_policy is not None:
+    if bc_policy is not None and not guided_only:
         print("[SAC] BC policy exploration...")
         state, info = env.reset()
         if isinstance(state, tuple):
@@ -309,9 +316,9 @@ def train_with_learned_reward(args):
                 # 旧 phase 的经验对新难度是误导性的（1cm 一步到位的策略对 1.5cm 无效）
                 from imitation_pipeline.rl.sac import ReplayBuffer
                 agent.buffer = ReplayBuffer(args.buffer_capacity, obs_dim, action_dim, device)
-                refresh_steps = max(args.warm_start_steps, 2000)
-                print(f"[Curriculum] Buffer cleared. Adding {refresh_steps} steps of Phase {curriculum_phase} experience...")
-                warm_start_with_bc(agent, bc_policy, env, device, refresh_steps, curriculum_phase)
+                refresh_steps = max(args.warm_start_steps, 5000)
+                print(f"[Curriculum] Buffer cleared. Adding {refresh_steps} steps of guided exploration for Phase {curriculum_phase}...")
+                warm_start_with_bc(agent, bc_policy, env, device, refresh_steps, curriculum_phase, guided_only=True)
                 print(f"[Curriculum] Buffer size after refresh: {agent.buffer.size}")
 
             # 重置环境
