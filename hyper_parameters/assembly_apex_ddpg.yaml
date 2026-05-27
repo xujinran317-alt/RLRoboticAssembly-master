@@ -1,0 +1,53 @@
+# ============================================
+# APEX-DDPG 算法超参数配置文件
+# 用于机器人装配任务的强化学习训练
+# ============================================
+
+assembly-apex-ddpg:
+
+    # ---------- 环境与算法 ----------
+    env: ROBOTIC_ASSEMBLY        # 环境名称（在 train.py 中注册的）
+    run: APEX_DDPG              # 使用的算法（分布式 DDPG）
+
+    # ---------- 模型保存 ----------
+    checkpoint_freq: 1           # 每训练多少 iteration 保存一次 checkpoint
+    checkpoint_at_end: True      # 训练结束时是否保存最终的 checkpoint
+
+    local_dir: "~/workspace/ray_results"  # checkpoint 保存目录
+
+    # ---------- 停止条件 ----------
+    stop:
+        successful_rate: 0.9     # 装配成功率 > 90% 时停止训练
+        # training_iteration: 500  # 或训练固定次数后停止
+
+    # ---------- 算法配置 ----------
+    config:
+        use_huber: True          # 使用 Huber Loss 代替 MSE（对异常值更鲁棒）
+        clip_rewards: False      # 不裁剪奖励（任务奖励本身已设计好）
+        num_workers: 5           # 并行采样 worker 数（建议 ≤ CPU核心数/2）
+        n_step: 3                # N步回报，加速学习（用未来几步的累计奖励）
+
+        target_network_update_freq: 50000  # 目标网络更新频率（APEX-DDPG 用硬更新）
+        buffer_size: 2000000     # 经验回放缓冲区总大小（会被 replay buffer 数量平分）
+        prioritized_replay_alpha: 0.5      # 优先级回放的优先级指数
+        sample_batch_size: 50    # 每个 worker 采样的批次大小
+        train_batch_size: 512    # 训练批次大小
+        min_iter_time_s: 10      # 每个 iteration 最短时间（秒）
+
+        # ---------- 神经网络结构 ----------
+        actor_hiddens: [256, 256]   # Actor 网络隐藏层：两层各256神经元
+        critic_hiddens: [256, 256]  # Critic 网络隐藏层：两层各256神经元
+
+        parameter_noise: False       # 不使用参数噪声
+        batch_mode: "truncate_episodes"  # 截断 episode 边界采样
+
+        tau: 1.0                     # 目标网络更新系数（tau=1 时用硬更新，配合 target_network_update_freq）
+
+        observation_filter: "MeanStdFilter"  # 观测标准化（减去均值除以标准差）
+
+        # ---------- 优化器配置（含人类示范数据）----------
+        optimizer:
+            num_replay_buffer_shards: 6   # 分布式 replay buffer 的分片数
+            human_demonstration: True     # 是否使用人类示范数据辅助训练
+            human_data_dir: "human_demo_data/lap"  # 人类示范数据目录（仅当 human_demonstration=True 时生效）
+

@@ -1,0 +1,59 @@
+# ============================================
+# PPO 算法配置文件 - 机器人装配任务
+# ============================================
+# PPO (Proximal Policy Optimization)
+# On-policy 算法，样本效率低于 SAC/DDPG，
+# 但训练过程更稳定，超参数不敏感。
+#
+# 与 SAC/DDPG 的主要差异：
+#   1. On-policy，无 replay buffer（buffer_size 等参数不可用）
+#   2. 用 n_steps 替代 train_freq 控制数据收集量
+#   3. clip_range 是 PPO 特有的策略约束参数
+#   4. 需要更多总步数才能达到相同效果（建议 ≥2M）
+#
+# 用法:
+#   assembly train -f configs/assembly_ppo.yaml
+# ============================================
+
+algo: ppo                      # 算法
+total_timesteps: 2_000_000     # PPO 样本效率低，步数适当调多
+name: assembly_ppo_lap_joint   # 实验名称
+log_dir: ./sb3_logs            # 日志目录
+render: false                  # 训练时是否显示窗口
+success_threshold: 0.9         # 成功率超过此值停止训练
+eval_freq: 10000               # 每多少步评估一次
+
+# ---------- 环境配置（与 SAC 保持一致）----------
+env_config:
+  action_dim: 6
+  max_vel: 0.01
+  max_rad: 0.01
+  max_steps: 4000
+  dist_threshold: 0.005
+  renders: false
+  time_step: 0.004
+  ft_noise: false
+  pose_noise: false
+  physical_noise: false
+
+# ---------- 模型超参数 ----------
+# 注意：buffer_size / learning_starts / train_freq /
+#       gradient_steps / tau 均不适用于 PPO，
+#       train_agent.py 会自动过滤，无需手动删除。
+model_config:
+  learning_rate: 0.0003         # 学习率（与 SAC 一致）
+  batch_size: 64                # PPO minibatch 大小（通常小于 off-policy）
+  gamma: 0.99                   # 折扣因子
+  n_steps: 2048                 # 每次更新前收集的步数（PPO 专有）
+  n_epochs: 10                  # 每批数据重复训练轮数（PPO 专有）
+  gae_lambda: 0.95              # GAE 优势估计平滑系数（PPO 专有）
+  clip_range: 0.2               # 策略裁剪范围（PPO 核心参数）
+  ent_coef: 0.0                 # 熵正则系数（0=关闭，>0 增强探索）
+  vf_coef: 0.5                  # Value function 损失权重
+  max_grad_norm: 0.5            # 梯度裁剪阈值
+
+  policy_kwargs:
+    net_arch:
+      pi: [256, 256]            # Actor 网络
+      vf: [256, 256]            # Value 网络（PPO 用 vf，不用 qf）
+    activation_fn: relu

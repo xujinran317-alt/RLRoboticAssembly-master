@@ -1,0 +1,58 @@
+# ============================================
+# DDPG 算法配置文件 - 机器人装配任务
+# ============================================
+# DDPG (Deep Deterministic Policy Gradient)
+# 确定性策略，依赖 OrnsteinUhlenbeck 噪声探索。
+# 相比 SAC 更依赖噪声调参，收敛稳定性略弱。
+#
+# 与 SAC 的主要差异：
+#   1. 确定性策略，需要显式 action_noise
+#   2. 无熵正则，ent_coef 不适用
+#   3. 学习率适当调高（1e-3）
+#
+# 用法:
+#   assembly train -f configs/assembly_ddpg.yaml
+# ============================================
+
+algo: ddpg                     # 算法
+total_timesteps: 1_000_000     # 总训练步数
+name: assembly_ddpg_lap_joint  # 实验名称
+log_dir: ./sb3_logs            # 日志目录
+render: false                  # 训练时是否显示窗口
+success_threshold: 0.9         # 成功率超过此值停止训练
+eval_freq: 10000               # 每多少步评估一次
+
+# ---------- 环境配置（与 SAC 保持一致）----------
+env_config:
+  action_dim: 6
+  max_vel: 0.01
+  max_rad: 0.01
+  max_steps: 4000
+  dist_threshold: 0.005
+  renders: false
+  time_step: 0.004
+  ft_noise: false
+  pose_noise: false
+  physical_noise: false
+
+# ---------- 模型超参数 ----------
+model_config:
+  learning_rate: 0.001          # DDPG 推荐 1e-3，高于 SAC 的 3e-4
+  buffer_size: 1000000          # 经验回放缓冲区大小
+  batch_size: 256               # 训练批次大小
+  tau: 0.005                    # 目标网络软更新系数
+  gamma: 0.99                   # 折扣因子
+  learning_starts: 1000         # 开始学习前的随机探索步数
+  train_freq: 1                 # 每步训练一次
+  gradient_steps: 1             # 每次梯度步数
+
+  # OrnsteinUhlenbeck 探索噪声（DDPG 核心，SAC 无此项）
+  action_noise:
+    type: ornstein_uhlenbeck    # 可选: ornstein_uhlenbeck / normal
+    sigma: 0.1                  # 噪声标准差，越大探索越强
+
+  policy_kwargs:
+    net_arch:
+      pi: [256, 256]            # Actor 网络
+      qf: [256, 256]            # Critic 网络
+    activation_fn: relu

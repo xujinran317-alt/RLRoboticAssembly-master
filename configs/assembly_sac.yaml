@@ -1,0 +1,56 @@
+﻿# ============================================
+# SAC 算法配置文件 - 机器人装配任务
+# ============================================
+# 用法:
+#   assembly train -f configs/assembly_sac.yaml
+# ============================================
+
+algo: sac
+total_timesteps: 1_000_000
+name: assembly_sac_lap_joint
+log_dir: ./sb3_logs
+render: false
+success_threshold: 0.9
+eval_freq: 10000
+
+# 演示数据预热（可选，先跑 collect_demo_buffer.py 生成）
+demo_buffer_file: demo_buffer.pkl
+
+# ---------- 环境配置 ----------
+env_config:
+  action_dim: 6
+  max_vel: 0.05
+  max_rad: 0.02
+  max_steps: 200
+  dist_threshold: 0.01
+  renders: false
+  time_step: 0.004
+  ft_noise: false
+  pose_noise: false
+  physical_noise: false
+
+  use_shaped_reward: true
+  reward_weights:
+    dist_scale: 5.0
+    progress_scale: 100.0
+    orn_scale: 5.0
+    success_bonus: 200.0
+    time_penalty: 0.1
+
+# ---------- 模型超参数 ----------
+model_config:
+  learning_rate: 0.0003
+  buffer_size: 1000000
+  batch_size: 256
+  tau: 0.005
+  gamma: 0.99
+  learning_starts: 5000
+  train_freq: 1
+  gradient_steps: 1
+  ent_coef: "auto"
+  use_sde: false
+  policy_kwargs:
+    net_arch:
+      pi: [256, 256]
+      qf: [256, 256]
+    activation_fn: relu

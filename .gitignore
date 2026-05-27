@@ -1,0 +1,19 @@
+__pycache__/
+*.pyc
+.DS_Store
+.idea/
+_ignore/
+human_demo_data/
+
+# Training artifacts
+*.pt
+*.zip
+*.pkl
+*.log
+*.txt
+imitation_pipeline/rl/checkpoints/
+sb3_logs/
+out*.txt
+training_*.log
+training_error.log
+training_output.log

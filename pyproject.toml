@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.backends._legacy:_Backend"
+
+[project]
+name = "robotic-assembly"
+version = "2.0.0"
+description = "机器人装配任务强化学习训练框架（PyTorch + SB3 + gymnasium）"
+authors = [
+    {name = "Robotic Assembly Team"},
+]
+license = {text = "MIT"}
+readme = "README.md"
+requires-python = ">=3.10"
+
+dependencies = [
+    "gymnasium>=0.29.0",
+    "stable-baselines3>=2.0.0",
+    "pybullet>=3.25",
+    "numpy>=1.24",
+    "transforms3d>=0.4.1",
+    "click>=8.1",
+    "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "black",
+    "ruff",
+]
+demo = [
+    "pygame>=2.5",
+]
+
+[project.scripts]
+assembly = "scripts.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["assembly_env*", "human_demo*", "scripts*", "utils*"]
