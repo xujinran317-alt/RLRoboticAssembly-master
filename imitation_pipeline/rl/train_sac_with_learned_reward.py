@@ -50,11 +50,11 @@ def create_env(renders=False, curriculum_phase=2):
         action_noise=False,
         physical_noise=False,
         time_step=1/250,
-        max_steps=200,                          # TASK 1: 4000 -> 200
+        max_steps=400,                          # 2cm 需要 ~200 步到位，400 步留足余量
         step_limit=True,
         action_dim=6,
-        max_vel=0.05,                           # TASK 4: ~2mm/step (need 200mm range)
-        max_rad=0.02,                           # TASK 4: ~0.004 rad/step ~ 0.8 rad/200ep
+        max_vel=0.05,                           # ~0.2mm/step
+        max_rad=0.02,                           # ~0.004 rad/step
         ft_obs_only=False,
         limit_ft=False,
         max_ft=[1000, 1000, 2500, 100, 100, 100],
@@ -62,11 +62,13 @@ def create_env(renders=False, curriculum_phase=2):
         dist_threshold=0.01,
         use_shaped_reward=True,
         reward_weights={
-            "dist_scale": 5.0,                  # 距离优势系数(辅助信号,不宜过大)
-            "progress_scale": 100.0,            # 进步奖励系数(主导信号)
+            "dist_scale": 5.0,                  # 距离优势系数(辅助信号)
+            "progress_scale": 100.0,            # 进步奖励系数(主导信号，会被自适应放大)
             "orn_scale": 5.0,                   # 姿态惩罚系数
             "success_bonus": 200.0,             # 成功大奖
-            "time_penalty": 0.1,                # 每步时间惩罚(鼓励高效完成)
+            "time_penalty": 0.1,                # 基础时间惩罚(距离远时自动减小)
+            "proximity_bonus": 50.0,            # 接近目标额外奖励(5mm内)
+            "proximity_threshold": 0.005,       # 接近奖励触发距离
         },
         curriculum_phase=curriculum_phase,
     )
@@ -79,49 +81,65 @@ def warm_start_with_bc(agent, bc_policy, env, device='cpu', n_steps=5000, curric
     在多个课程阶段采样,确保 buffer 包含不同难度的数据。
     guided_only=True 时只做引导探索（用于 curriculum 升级后的 refresh）。
     """
-    print("[SAC] Warm-starting replay buffer with BC + guided exploration...")
+    print("[SAC] Warm-starting replay buffer with guided exploration...")
 
     collected = 0
     total_successes = 0
 
     # ---- 引导式探索:在当前课程阶段采样 ----
+    # 高课程阶段（>=3，即 2cm+）只做 guided exploration，跳过 BC policy
+    # 因为 BC policy 在 2cm+ 全部失败，灌入 buffer 只会稀释成功经验
     phases_to_sample = [curriculum_phase]
     if not guided_only and curriculum_phase < 2:
         phases_to_sample.append(curriculum_phase + 1)  # 也采样下一难度
 
-    # 引导探索分配全部步数（guided_only）或一半步数（和 BC 共享）
-    if guided_only:
+    # 引导探索分配全部步数（guided_only 或高课程阶段）或一半步数
+    if guided_only or curriculum_phase >= 3:
         guided_steps = n_steps
     else:
         guided_steps = n_steps // 2
     steps_per_phase = guided_steps // len(phases_to_sample)
 
+    # 噪声水平：低课程阶段用 0.1，高课程阶段用 0.05（减少 2cm 的无效探索）
+    noise_level = 0.05 if curriculum_phase >= 3 else 0.1
+
     for phase in phases_to_sample:
         env.curriculum_phase = phase
-        print(f"[SAC] Guided exploration at curriculum phase {phase}...")
+        print(f"[SAC] Guided exploration at curriculum phase {phase} (noise={noise_level})...")
         state, info = env.reset()
         if isinstance(state, tuple):
             state = state[0]
 
         phase_successes = 0
+        episode_transitions = []  # 暂存当前 episode 的所有 transition
+
         for _ in range(steps_per_phase):
             member_pos = np.array(env.member_pose[0])
             target_pos = np.array(env.get_target_pose()[0])
             diff = target_pos - member_pos
             pos_action = np.clip(diff / (np.max(np.abs(diff)) + 1e-8), -1, 1)
             action = np.concatenate([pos_action, np.zeros(3)]).astype(np.float32)
-            action = action + np.random.randn(6).astype(np.float32) * 0.1
+            action = action + np.random.randn(6).astype(np.float32) * noise_level
             action = np.clip(action, -1, 1)
 
             next_state, reward, terminated, truncated, info = env.step(action)
             done = terminated or truncated
-            agent.store_transition(state, action, reward, next_state, done)
+            episode_transitions.append((state, action, reward, next_state, done))
             collected += 1
             state = next_state
 
             if done:
-                if info.get('num_success', 0):
+                is_success = bool(info.get('num_success', 0))
+                if is_success:
                     phase_successes += 1
+                    # 成功 episode：存入 success_buffer（不污染主 buffer）
+                    for s, a, r, ns, d in episode_transitions:
+                        agent.success_buffer.push(s, a, r, ns, float(d))
+                else:
+                    # 失败 episode：只存入主 buffer
+                    for s, a, r, ns, d in episode_transitions:
+                        agent.buffer.push(s, a, r, ns, float(d))
+                episode_transitions = []
                 state, info = env.reset()
                 if isinstance(state, tuple):
                     state = state[0]
@@ -129,9 +147,9 @@ def warm_start_with_bc(agent, bc_policy, env, device='cpu', n_steps=5000, curric
         total_successes += phase_successes
         print(f"[SAC] Phase {phase}: {steps_per_phase} steps, {phase_successes} successes")
 
-    # ---- BC policy 填充剩余（guided_only 模式跳过）----
+    # ---- BC policy 填充剩余（guided_only 模式或高课程阶段跳过）----
     env.curriculum_phase = curriculum_phase
-    if bc_policy is not None and not guided_only:
+    if bc_policy is not None and not guided_only and curriculum_phase < 3:
         print("[SAC] BC policy exploration...")
         state, info = env.reset()
         if isinstance(state, tuple):
@@ -209,20 +227,28 @@ def train_with_learned_reward(args):
     print(f"[SAC] Reward mode: HYBRID (alpha={args.reward_alpha} * env + beta={args.reward_beta} * learned)")
     print(f"[SAC] Alpha (entropy temp): {args.alpha}")
 
-    # ====== 4. 创建环境(课程学习:从近距离开始)======
+    # ====== 4. 创建环境(课程学习)======
     # Phase 0=1.0cm → 1=1.2cm → 2=1.5cm → 3=2.0cm → 4=2.5cm → 5=3.0cm
     # 每步只增加0.2~0.5cm，保证策略能平滑泛化
-    curriculum_phase = 0
     curriculum_heights = {0: 1.0, 1: 1.2, 2: 1.5, 3: 2.0, 4: 2.5, 5: 3.0}
+    curriculum_phase = args.start_phase  # 支持从指定阶段开始
     max_curriculum = 5
     env = create_env(curriculum_phase=curriculum_phase)
     print(f"[Curriculum] Phase {curriculum_phase}: starting from {curriculum_heights[curriculum_phase]}cm")
 
-    # ====== 5. Warm-start replay buffer ======
+    # ====== 5. 加载权重(如果指定 --load-weights)======
+    # 只加载 policy/Q 网络权重，不加载 optimizer/buffer/元数据
+    # 用途：从 1.5cm 成功的权重迁移到 2cm 训练
+    if args.load_weights:
+        print(f"[Weights] Loading policy/Q weights from: {args.load_weights}")
+        agent.load(args.load_weights)
+        print(f"[Weights] Weights loaded. Starting fresh training at curriculum phase {curriculum_phase}")
+
+    # ====== 6. Warm-start replay buffer ======
     if args.warm_start_steps > 0:
         warm_start_with_bc(agent, bc_policy, env, device, args.warm_start_steps, curriculum_phase)
 
-    # ====== 6. 断点恢复(如果指定 --resume)======
+    # ====== 7. 断点恢复(如果指定 --resume)======
     start_step = 0
     episode_num = 0
     reward_history = []
@@ -261,8 +287,9 @@ def train_with_learned_reward(args):
         next_state, env_reward, terminated, truncated, info = env.step(action)
         done = terminated or truncated
 
-        # --- 存储 transition ---
-        agent.store_transition(state, action, env_reward, next_state, done)
+        # --- 存储 transition（成功时同时存入 success_buffer）---
+        is_success = bool(info.get('num_success', 0)) if isinstance(info, dict) else False
+        agent.store_transition(state, action, env_reward, next_state, done, is_success=is_success)
 
         episode_reward += env_reward
         episode_steps += 1
@@ -291,6 +318,7 @@ def train_with_learned_reward(args):
                       f"EpLen: {episode_steps:4d} | "
                       f"Success(100ep): {success_rate:.3f} | "
                       f"Alpha: {agent.alpha:.3f} | "
+                      f"SuccBuf: {agent.success_buffer.size} | "
                       f"Curr: {curriculum_phase}({curriculum_heights[curriculum_phase]}cm)")
 
             # 保存 best success checkpoint
@@ -299,10 +327,10 @@ def train_with_learned_reward(args):
                 agent.save(os.path.join(args.save_dir, f'sac_success_{success_rate:.3f}.pt'))
 
             # ---- 课程学习：成功率达标后提升难度 ----
-            # 需要至少 30 个 episode + 成功率 > 20% 才升级
+            # 需要至少 30 个 episode + 成功率 > 15% 才升级（2cm 难度大，阈值适当降低）
             if (curriculum_phase < max_curriculum
                     and len(recent_successes) >= 30
-                    and success_rate > 0.2):
+                    and success_rate > 0.15):
                 curriculum_phase += 1
                 env.close()
                 env = create_env(curriculum_phase=curriculum_phase)
@@ -312,12 +340,11 @@ def train_with_learned_reward(args):
                 print(f"{'='*60}\n")
                 recent_successes = []  # 重置成功率统计
 
-                # === 清空旧 buffer，用新难度经验重新填充 ===
-                # 旧 phase 的经验对新难度是误导性的（1cm 一步到位的策略对 1.5cm 无效）
-                from imitation_pipeline.rl.sac import ReplayBuffer
-                agent.buffer = ReplayBuffer(args.buffer_capacity, obs_dim, action_dim, device)
-                refresh_steps = max(args.warm_start_steps, 5000)
-                print(f"[Curriculum] Buffer cleared. Adding {refresh_steps} steps of guided exploration for Phase {curriculum_phase}...")
+                # === 不清空 buffer，直接追加新难度的引导数据 ===
+                # 旧 phase 的经验虽然不完全适用，但保留它们有助于 SAC 学习泛化
+                # 关键：引导探索的成功经验必须保留，不能清掉
+                refresh_steps = max(args.warm_start_steps, 10000)
+                print(f"[Curriculum] Adding {refresh_steps} steps of guided exploration for Phase {curriculum_phase} (buffer NOT cleared)...")
                 warm_start_with_bc(agent, bc_policy, env, device, refresh_steps, curriculum_phase, guided_only=True)
                 print(f"[Curriculum] Buffer size after refresh: {agent.buffer.size}")
 
@@ -416,6 +443,10 @@ def main():
     parser.add_argument('--bc-policy-path', type=str,
                         default='imitation_pipeline/bc/bc_policy.pt')
     parser.add_argument('--checkpoint', type=str, default=None)
+    parser.add_argument('--load-weights', type=str, default=None,
+                        help='只加载 policy/Q 网络权重（不加载 optimizer/buffer），用于跨阶段迁移')
+    parser.add_argument('--start-phase', type=int, default=0,
+                        help='课程学习起始阶段 (0=1cm, 1=1.2cm, 2=1.5cm, 3=2cm, 4=2.5cm, 5=3cm)')
     parser.add_argument('--save-dir', type=str, default='imitation_pipeline/rl/checkpoints')
 
     # Reward 混合权重
@@ -436,7 +467,7 @@ def main():
     # 训练参数
     parser.add_argument('--total-steps', type=int, default=200000)
     parser.add_argument('--learning-starts', type=int, default=1000)
-    parser.add_argument('--warm-start-steps', type=int, default=200)
+    parser.add_argument('--warm-start-steps', type=int, default=20000)
     parser.add_argument('--log-interval', type=int, default=10)
     parser.add_argument('--save-interval', type=int, default=20000)
 

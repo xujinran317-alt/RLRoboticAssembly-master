@@ -96,11 +96,15 @@ class AssemblySimEnv(AssemblyBaseTask):
         self.use_shaped_reward = use_shaped_reward
 
         # 奖励权重（可通过 YAML env_config 传入）
+        # 设计原则：距离越远，time_penalty 越小，progress_scale 越大
+        # 这样 1cm~3cm 都能获得有效的梯度信号
         default_weights = {
             "dist_scale": 100.0,      # 绝对距离惩罚系数
             "progress_scale": 500.0,  # 进步奖励系数（核心信号）
             "orn_scale": 30.0,        # 姿态对齐惩罚系数
             "success_bonus": 100.0,   # 成功额外奖励
+            "proximity_bonus": 50.0,  # 接近目标时的额外奖励（5mm 以内）
+            "proximity_threshold": 0.005,  # 接近奖励触发距离
         }
         if reward_weights:
             default_weights.update(reward_weights)
@@ -109,7 +113,7 @@ class AssemblySimEnv(AssemblyBaseTask):
         # 上一步距离（用于计算进度奖励），在 reset 中初始化
         self._prev_dist: float = 0.0
         
-        # 课程学习阶段：0=近距离(1cm), 1=中距离(2cm), 2=正常(3cm)
+        # 课程学习阶段：0=1cm, 1=1.2cm, 2=1.5cm, 3=2cm, 4=2.5cm, 5=3cm
         self.curriculum_phase = curriculum_phase
 
         # ---- 域随机化参数 ----
@@ -201,12 +205,31 @@ class AssemblySimEnv(AssemblyBaseTask):
         # 初始时 dist ≈ max_dist，advantage ≈ 0；靠近目标时 advantage 增大
         advantage = self.max_dist - curr_dist
 
-        # ---- 7. 组合奖励 ----
+        # ---- 7. 距离自适应参数（关键：远距离任务需要更强的梯度信号）----
+        # 距离越远，time_penalty 越小（避免惩罚探索），progress_scale 越大（鼓励前进）
+        init_dist = self.max_dist if self.max_dist > 0 else 0.01
+        dist_ratio = curr_dist / init_dist  # 0~1，1=初始位置，0=目标
+        
+        # time_penalty: 近距离(1cm)时 0.1，远距离(3cm)时 0.02
+        adaptive_time_penalty = 0.02 + 0.08 * min(dist_ratio, 1.0)
+        
+        # progress_scale: 远距离时放大进步奖励（让小进步也有明显信号）
+        adaptive_progress_scale = self.rw["progress_scale"] * (1.0 + 2.0 * min(dist_ratio, 1.0))
+
+        # ---- 8. 接近奖励（额外激励：离目标很近时给额外正反馈）----
+        proximity_bonus = 0.0
+        prox_thresh = self.rw.get("proximity_threshold", 0.005)
+        if curr_dist < prox_thresh:
+            # 距离越近，奖励越大（线性衰减）
+            proximity_bonus = self.rw.get("proximity_bonus", 50.0) * (1.0 - curr_dist / prox_thresh)
+
+        # ---- 9. 组合奖励 ----
         reward = (
-            + progress   * self.rw["progress_scale"]    # 进步奖励（主导）
-            + advantage  * self.rw["dist_scale"]        # 距离优势（辅助）
-            - orn_dist   * self.rw["orn_scale"]         # 姿态惩罚
-            - self.rw.get("time_penalty", 0.1)           # 时间惩罚
+            + progress         * adaptive_progress_scale    # 进步奖励（主导，距离自适应）
+            + advantage        * self.rw["dist_scale"]     # 距离优势（辅助）
+            - orn_dist         * self.rw["orn_scale"]      # 姿态惩罚
+            - adaptive_time_penalty                          # 时间惩罚（距离自适应）
+            + proximity_bonus                                # 接近奖励
         )
 
         if terminated:
@@ -244,8 +267,8 @@ class AssemblySimEnv(AssemblyBaseTask):
         self.env = self._env_robot()
         
         # ---- 课程学习：根据阶段设置 member 到目标的距离 ----
-        # 渐进式课程，每步只增加 0.5cm
-        # Phase 0: 1cm, Phase 1: 1.5cm, Phase 2: 2cm, Phase 3: 2.5cm, Phase 4: 3cm
+        # 渐进式课程，每步增加 0.2~0.5cm
+        # Phase 0: 1cm, Phase 1: 1.2cm, Phase 2: 1.5cm, Phase 3: 2cm, Phase 4: 2.5cm, Phase 5: 3cm
         curriculum_member_heights = {0: 0.01, 1: 0.012, 2: 0.015, 3: 0.02, 4: 0.025, 5: 0.03}
         target_member_height = curriculum_member_heights.get(self.curriculum_phase, 0.03)
         if self.curriculum_phase in curriculum_member_heights:

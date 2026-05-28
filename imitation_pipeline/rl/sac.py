@@ -230,6 +230,10 @@ class SACAgent:
         # --- 回放缓冲区 ---
         self.buffer = ReplayBuffer(buffer_capacity, obs_dim, action_dim, device)
         
+        # --- 成功经验缓冲区（过采样用）---
+        self.success_buffer = ReplayBuffer(10000, obs_dim, action_dim, device)
+        self.success_oversample_ratio = 0.3  # 每 batch 中 30% 来自成功经验
+        
         # --- 训练步数计数器 ---
         self.step_counter = 0
     
@@ -245,9 +249,11 @@ class SACAgent:
                 action = torch.tanh(mean)
         return action.cpu().numpy().flatten()
     
-    def store_transition(self, state, action, reward, next_state, done):
-        """存储 transition 到 replay buffer"""
+    def store_transition(self, state, action, reward, next_state, done, is_success=False):
+        """存储 transition 到 replay buffer，成功经验同时存入 success_buffer"""
         self.buffer.push(state, action, reward, next_state, float(done))
+        if is_success:
+            self.success_buffer.push(state, action, reward, next_state, float(done))
     
     def update(self):
         """
@@ -264,8 +270,20 @@ class SACAgent:
         if self.buffer.size < self.batch_size:
             return {}
         
-        # --- 采样 ---
-        states, actions, env_rewards, next_states, dones = self.buffer.sample(self.batch_size)
+        # --- 采样（含成功经验过采样）---
+        if self.success_buffer.size >= 10:
+            # 30% 从成功 buffer 采，70% 从主 buffer 采
+            n_success = max(1, int(self.batch_size * self.success_oversample_ratio))
+            n_normal = self.batch_size - n_success
+            s1, a1, r1, ns1, d1 = self.buffer.sample(n_normal)
+            s2, a2, r2, ns2, d2 = self.success_buffer.sample(n_success)
+            states = torch.cat([s1, s2], dim=0)
+            actions = torch.cat([a1, a2], dim=0)
+            env_rewards = torch.cat([r1, r2], dim=0)
+            next_states = torch.cat([ns1, ns2], dim=0)
+            dones = torch.cat([d1, d2], dim=0)
+        else:
+            states, actions, env_rewards, next_states, dones = self.buffer.sample(self.batch_size)
         
         # ===== 【关键改动】使用 learned reward + 运行统计归一化 =====
         if self.reward_model is not None:
