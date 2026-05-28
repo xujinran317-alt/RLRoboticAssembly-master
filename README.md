@@ -1,4 +1,4 @@
-git add -A && git commit -m "xxx" && git push
+git push origin main
 
 # RL Robotic Assembly — 机器人装配强化学习
 
