@@ -176,19 +176,24 @@ def train_with_learned_reward(args):
 
     device = torch.device(args.device)
 
-    # ====== 1. 加载 Reward Model ======
-    print("=" * 60)
-    print("Phase 1: Loading Reward Model")
-    print("=" * 60)
-
     # 从 demo 数据获取维度信息
     demo_data = load_demo_pkl(args.demo_path)
     obs_dim = demo_data['states'].shape[1]
     action_dim = demo_data['actions'].shape[1]
 
-    reward_model = RewardModel(obs_dim, action_dim, args.hidden_dim).to(device)
-    reward_model = load_model(reward_model, args.reward_model_path, device)
-    reward_model.eval()
+    # ====== 1. 加载 Reward Model（仅当 reward_beta > 0 时需要）======
+    reward_model = None
+    if args.reward_beta > 0:
+        print("=" * 60)
+        print("Phase 1: Loading Reward Model")
+        print("=" * 60)
+        reward_model = RewardModel(obs_dim, action_dim, args.hidden_dim).to(device)
+        reward_model = load_model(reward_model, args.reward_model_path, device)
+        reward_model.eval()
+    else:
+        print("=" * 60)
+        print("Phase 1: Skipped (reward_beta=0, using env reward only)")
+        print("=" * 60)
 
     # ====== 2. 加载 BC Policy(可选,用于 warm start)======
     bc_policy = None
@@ -445,7 +450,7 @@ def main():
     parser.add_argument('--checkpoint', type=str, default=None)
     parser.add_argument('--load-weights', type=str, default=None,
                         help='只加载 policy/Q 网络权重（不加载 optimizer/buffer），用于跨阶段迁移')
-    parser.add_argument('--start-phase', type=int, default=0,
+    parser.add_argument('--start-phase', type=int, default=2,
                         help='课程学习起始阶段 (0=1cm, 1=1.2cm, 2=1.5cm, 3=2cm, 4=2.5cm, 5=3cm)')
     parser.add_argument('--save-dir', type=str, default='imitation_pipeline/rl/checkpoints')
 

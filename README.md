@@ -1,5 +1,16 @@
 git push origin main
 
+# 评估全部 4 个 baseline（各 100 episode）
+python scripts/eval_all_baselines.py --baselines bc sparse dense ours --n-episodes 100
+
+# 只评估 Ours（快速验证）
+python scripts/eval_all_baselines.py --baselines ours --n-episodes 50
+
+# 指定 checkpoint 路径
+python scripts/eval_all_baselines.py --baselines ours --sac-path imitation_pipeline/rl/checkpoints/sac_success_1.000.pt
+
+# 指定课程阶段（默认 phase 5 = 3.0cm）
+python scripts/eval_all_baselines.py --curriculum-phase 3  # 2.0cm
 # RL Robotic Assembly — 机器人装配强化学习
 
 基于 **模仿学习 + SAC 强化学习** 的机器人装配任务训练框架。

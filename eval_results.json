@@ -1,0 +1,50 @@
+{
+  "BC_Only": {
+    "success_rate": 0.0,
+    "avg_episode_length": 401.0,
+    "avg_episode_length_success": null,
+    "avg_episode_length_fail": 401.0,
+    "avg_peak_force_z": 1213.3837890625,
+    "std_peak_force_z": 0.0,
+    "avg_peak_force_total": 1280.828369140625,
+    "std_peak_force_total": 0.0001220703125,
+    "num_success": 0,
+    "n_episodes": 100
+  },
+  "SAC_Sparse": {
+    "success_rate": 0.0,
+    "avg_episode_length": 401.0,
+    "avg_episode_length_success": null,
+    "avg_episode_length_fail": 401.0,
+    "avg_peak_force_z": 1521.1356201171875,
+    "std_peak_force_z": 0.000244140625,
+    "avg_peak_force_total": 1593.11328125,
+    "std_peak_force_total": 0.0003662109375,
+    "num_success": 0,
+    "n_episodes": 100
+  },
+  "SAC_Dense": {
+    "success_rate": 0.0,
+    "avg_episode_length": 401.0,
+    "avg_episode_length_success": null,
+    "avg_episode_length_fail": 401.0,
+    "avg_peak_force_z": 1521.1356201171875,
+    "std_peak_force_z": 0.000244140625,
+    "avg_peak_force_total": 1593.11328125,
+    "std_peak_force_total": 0.0003662109375,
+    "num_success": 0,
+    "n_episodes": 100
+  },
+  "Ours": {
+    "success_rate": 0.0,
+    "avg_episode_length": 401.0,
+    "avg_episode_length_success": null,
+    "avg_episode_length_fail": 401.0,
+    "avg_peak_force_z": 1521.1356201171875,
+    "std_peak_force_z": 0.000244140625,
+    "avg_peak_force_total": 1593.11328125,
+    "std_peak_force_total": 0.0003662109375,
+    "num_success": 0,
+    "n_episodes": 100
+  }
+}

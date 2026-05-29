@@ -297,6 +297,9 @@ class SACAgent:
                 self.reward_rms.normalize(env_rewards.cpu().numpy())
             ).to(self.device)
             rewards = self.reward_alpha * env_rewards_norm + self.reward_beta * learned_r
+        else:
+            # 无 learned reward 时，直接用环境奖励
+            rewards = env_rewards
         
         # --- 更新 Q 函数 ---
         with torch.no_grad():
