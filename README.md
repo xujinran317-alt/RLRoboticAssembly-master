@@ -6,6 +6,8 @@ python scripts/eval_all_baselines.py --baselines bc sparse dense ours --n-episod
 # 只评估 Ours（快速验证）
 python scripts/eval_all_baselines.py --baselines ours --n-episodes 50
 
+python -m imitation_pipeline.rl.train_sac_with_learned_reward --mode train --start-phase 2 --load-weights "imitation_pipeline/rl/checkpoints/sac_success_0.900.pt" --total-steps 500000 --warm-start-steps 30000 --reward-alpha 1.0 --reward-beta 0.0 --save-dir imitation_pipeline/rl/checkpoints_v2
+
 # 指定 checkpoint 路径
 python scripts/eval_all_baselines.py --baselines ours --sac-path imitation_pipeline/rl/checkpoints/sac_success_1.000.pt
 

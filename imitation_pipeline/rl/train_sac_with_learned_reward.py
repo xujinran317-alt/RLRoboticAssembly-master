@@ -41,6 +41,11 @@ def create_env(renders=False, curriculum_phase=2):
 
     from assembly_env.sim_task import AssemblySimEnv
 
+    # ---- 根据课程阶段调整环境参数 ----
+    # 2cm+ 任务需要更多步数、更强的奖励信号
+    is_far_task = curriculum_phase >= 4  # 2cm 及以上
+    is_mid_task = curriculum_phase >= 3  # 1.7cm 及以上
+
     env = AssemblySimEnv(
         env_robot=None,                         # 默认使用 RobotSimRobotless
         self_collision_enabled=True,
@@ -50,7 +55,7 @@ def create_env(renders=False, curriculum_phase=2):
         action_noise=False,
         physical_noise=False,
         time_step=1/250,
-        max_steps=400,                          # 2cm 需要 ~200 步到位，400 步留足余量
+        max_steps=500 if is_far_task else (450 if is_mid_task else 400),  # 远距离给更多步数
         step_limit=True,
         action_dim=6,
         max_vel=0.05,                           # ~0.2mm/step
@@ -62,13 +67,13 @@ def create_env(renders=False, curriculum_phase=2):
         dist_threshold=0.01,
         use_shaped_reward=True,
         reward_weights={
-            "dist_scale": 5.0,                  # 距离优势系数(辅助信号)
-            "progress_scale": 100.0,            # 进步奖励系数(主导信号，会被自适应放大)
+            "dist_scale": 8.0 if is_far_task else 5.0,       # 2cm+ 加强距离信号
+            "progress_scale": 150.0 if is_far_task else (120.0 if is_mid_task else 100.0),
             "orn_scale": 5.0,                   # 姿态惩罚系数
-            "success_bonus": 200.0,             # 成功大奖
-            "time_penalty": 0.1,                # 基础时间惩罚(距离远时自动减小)
-            "proximity_bonus": 50.0,            # 接近目标额外奖励(5mm内)
-            "proximity_threshold": 0.005,       # 接近奖励触发距离
+            "success_bonus": 300.0 if is_far_task else 200.0,  # 2cm+ 成功奖励更高
+            "time_penalty": 0.05 if is_far_task else 0.1,     # 2cm+ 时间惩罚更小(鼓励探索)
+            "proximity_bonus": 80.0 if is_far_task else 50.0, # 2cm+ 接近奖励更强
+            "proximity_threshold": 0.008 if is_far_task else 0.005,
         },
         curriculum_phase=curriculum_phase,
     )
@@ -94,14 +99,14 @@ def warm_start_with_bc(agent, bc_policy, env, device='cpu', n_steps=5000, curric
         phases_to_sample.append(curriculum_phase + 1)  # 也采样下一难度
 
     # 引导探索分配全部步数（guided_only 或高课程阶段）或一半步数
-    if guided_only or curriculum_phase >= 3:
+    if guided_only or curriculum_phase >= 4:  # 2cm+ 只做引导探索
         guided_steps = n_steps
     else:
         guided_steps = n_steps // 2
     steps_per_phase = guided_steps // len(phases_to_sample)
 
-    # 噪声水平：低课程阶段用 0.1，高课程阶段用 0.05（减少 2cm 的无效探索）
-    noise_level = 0.05 if curriculum_phase >= 3 else 0.1
+    # 噪声水平：远距离适当加大噪声，帮助探索不同路径
+    noise_level = 0.08 if curriculum_phase >= 3 else 0.1
 
     for phase in phases_to_sample:
         env.curriculum_phase = phase
@@ -149,7 +154,7 @@ def warm_start_with_bc(agent, bc_policy, env, device='cpu', n_steps=5000, curric
 
     # ---- BC policy 填充剩余（guided_only 模式或高课程阶段跳过）----
     env.curriculum_phase = curriculum_phase
-    if bc_policy is not None and not guided_only and curriculum_phase < 3:
+    if bc_policy is not None and not guided_only and curriculum_phase < 4:  # 2cm+ 跳过 BC
         print("[SAC] BC policy exploration...")
         state, info = env.reset()
         if isinstance(state, tuple):
@@ -233,11 +238,11 @@ def train_with_learned_reward(args):
     print(f"[SAC] Alpha (entropy temp): {args.alpha}")
 
     # ====== 4. 创建环境(课程学习)======
-    # Phase 0=1.0cm → 1=1.2cm → 2=1.5cm → 3=2.0cm → 4=2.5cm → 5=3.0cm
-    # 每步只增加0.2~0.5cm，保证策略能平滑泛化
-    curriculum_heights = {0: 1.0, 1: 1.2, 2: 1.5, 3: 2.0, 4: 2.5, 5: 3.0}
+    # Phase 0=1.0cm → 1=1.2cm → 2=1.5cm → 3=1.7cm → 4=2.0cm → 5=2.5cm → 6=3.0cm
+    # 1.5cm→1.7cm→2.0cm 渐进过渡，避免策略泛化失败
+    curriculum_heights = {0: 1.0, 1: 1.2, 2: 1.5, 3: 1.7, 4: 2.0, 5: 2.5, 6: 3.0}
     curriculum_phase = args.start_phase  # 支持从指定阶段开始
-    max_curriculum = 5
+    max_curriculum = 6
     env = create_env(curriculum_phase=curriculum_phase)
     print(f"[Curriculum] Phase {curriculum_phase}: starting from {curriculum_heights[curriculum_phase]}cm")
 
@@ -332,10 +337,14 @@ def train_with_learned_reward(args):
                 agent.save(os.path.join(args.save_dir, f'sac_success_{success_rate:.3f}.pt'))
 
             # ---- 课程学习：成功率达标后提升难度 ----
-            # 需要至少 30 个 episode + 成功率 > 15% 才升级（2cm 难度大，阈值适当降低）
+            # 2cm+ 任务更难，阈值适当降低；需要更多 episode 保证统计稳定
+            advance_threshold = {0: 0.25, 1: 0.20, 2: 0.15, 3: 0.15, 4: 0.12, 5: 0.10}
+            min_episodes = {0: 30, 1: 30, 2: 40, 3: 50, 4: 50, 5: 50}
+            threshold = advance_threshold.get(curriculum_phase, 0.15)
+            min_ep = min_episodes.get(curriculum_phase, 40)
             if (curriculum_phase < max_curriculum
-                    and len(recent_successes) >= 30
-                    and success_rate > 0.15):
+                    and len(recent_successes) >= min_ep
+                    and success_rate > threshold):
                 curriculum_phase += 1
                 env.close()
                 env = create_env(curriculum_phase=curriculum_phase)
@@ -345,13 +354,20 @@ def train_with_learned_reward(args):
                 print(f"{'='*60}\n")
                 recent_successes = []  # 重置成功率统计
 
-                # === 不清空 buffer，直接追加新难度的引导数据 ===
-                # 旧 phase 的经验虽然不完全适用，但保留它们有助于 SAC 学习泛化
-                # 关键：引导探索的成功经验必须保留，不能清掉
-                refresh_steps = max(args.warm_start_steps, 10000)
-                print(f"[Curriculum] Adding {refresh_steps} steps of guided exploration for Phase {curriculum_phase} (buffer NOT cleared)...")
+                # === 跨大难度时清空 buffer ===
+                # 1.7cm → 2cm 跳跃大，旧经验会严重干扰新阶段学习
+                # 清空 buffer + success_buffer，用新阶段的引导数据重新填充
+                if curriculum_phase >= 3:
+                    agent.buffer = type(agent.buffer)(agent.buffer.capacity, agent.obs_dim, agent.action_dim, agent.device)
+                    agent.success_buffer = type(agent.success_buffer)(agent.success_buffer.capacity, agent.obs_dim, agent.action_dim, agent.device)
+                    print(f"[Curriculum] Buffer CLEARED for phase {curriculum_phase} (large difficulty jump)")
+                else:
+                    print(f"[Curriculum] Buffer kept ({agent.buffer.size} transitions, small jump)")
+
+                refresh_steps = max(args.warm_start_steps, 20000)
+                print(f"[Curriculum] Adding {refresh_steps} steps of guided exploration for Phase {curriculum_phase}...")
                 warm_start_with_bc(agent, bc_policy, env, device, refresh_steps, curriculum_phase, guided_only=True)
-                print(f"[Curriculum] Buffer size after refresh: {agent.buffer.size}")
+                print(f"[Curriculum] Buffer size after refresh: {agent.buffer.size}, successes in buf: {agent.success_buffer.size}")
 
             # 重置环境
             state, info = env.reset()
@@ -451,7 +467,7 @@ def main():
     parser.add_argument('--load-weights', type=str, default=None,
                         help='只加载 policy/Q 网络权重（不加载 optimizer/buffer），用于跨阶段迁移')
     parser.add_argument('--start-phase', type=int, default=2,
-                        help='课程学习起始阶段 (0=1cm, 1=1.2cm, 2=1.5cm, 3=2cm, 4=2.5cm, 5=3cm)')
+                        help='课程学习起始阶段 (0=1cm, 1=1.2cm, 2=1.5cm, 3=1.7cm, 4=2cm, 5=2.5cm, 6=3cm)')
     parser.add_argument('--save-dir', type=str, default='imitation_pipeline/rl/checkpoints')
 
     # Reward 混合权重
@@ -470,9 +486,9 @@ def main():
     parser.add_argument('--buffer-capacity', type=int, default=100000)
 
     # 训练参数
-    parser.add_argument('--total-steps', type=int, default=200000)
+    parser.add_argument('--total-steps', type=int, default=300000)
     parser.add_argument('--learning-starts', type=int, default=1000)
-    parser.add_argument('--warm-start-steps', type=int, default=20000)
+    parser.add_argument('--warm-start-steps', type=int, default=30000)
     parser.add_argument('--log-interval', type=int, default=10)
     parser.add_argument('--save-interval', type=int, default=20000)
 

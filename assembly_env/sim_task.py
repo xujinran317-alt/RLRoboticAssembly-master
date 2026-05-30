@@ -113,7 +113,8 @@ class AssemblySimEnv(AssemblyBaseTask):
         # 上一步距离（用于计算进度奖励），在 reset 中初始化
         self._prev_dist: float = 0.0
         
-        # 课程学习阶段：0=1cm, 1=1.2cm, 2=1.5cm, 3=2cm, 4=2.5cm, 5=3cm
+        # 课程学习阶段：0=1cm, 1=1.2cm, 2=1.5cm, 3=1.7cm, 4=2.0cm, 5=2.5cm, 6=3.0cm
+        # 在 1.5cm 和 2cm 之间加了 1.7cm 过渡，减少跳跃
         self.curriculum_phase = curriculum_phase
 
         # ---- 域随机化参数 ----
@@ -268,8 +269,8 @@ class AssemblySimEnv(AssemblyBaseTask):
         
         # ---- 课程学习：根据阶段设置 member 到目标的距离 ----
         # 渐进式课程，每步增加 0.2~0.5cm
-        # Phase 0: 1cm, Phase 1: 1.2cm, Phase 2: 1.5cm, Phase 3: 2cm, Phase 4: 2.5cm, Phase 5: 3cm
-        curriculum_member_heights = {0: 0.01, 1: 0.012, 2: 0.015, 3: 0.02, 4: 0.025, 5: 0.03}
+        # Phase 0: 1cm, Phase 1: 1.2cm, Phase 2: 1.5cm, Phase 3: 1.7cm, Phase 4: 2cm, Phase 5: 2.5cm, Phase 6: 3cm
+        curriculum_member_heights = {0: 0.01, 1: 0.012, 2: 0.015, 3: 0.017, 4: 0.02, 5: 0.025, 6: 0.03}
         target_member_height = curriculum_member_heights.get(self.curriculum_phase, 0.03)
         if self.curriculum_phase in curriculum_member_heights:
             import assembly_env.robots.sim_robotless as sr
